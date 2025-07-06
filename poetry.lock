@@ -32,8 +32,8 @@ pydantic = "^1.9.2"
 [package.source]
 type = "git"
 url = "https://github.com/trytodupe/amis-python.git"
-reference = "4b87c20c88741239803daf5c4ec29fdd067cadc5"
-resolved_reference = "4b87c20c88741239803daf5c4ec29fdd067cadc5"
+reference = "74f239548e27b4011d640a7aebcab624883018ad"
+resolved_reference = "74f239548e27b4011d640a7aebcab624883018ad"
 
 [[package]]
 name = "anyio"
@@ -1571,4 +1571,4 @@ multidict = ">=4.0"
 [metadata]
 lock-version = "2.1"
 python-versions = ">=3.9,<4.0"
-content-hash = "3c78190331137a226b8c301ac7edcb898b064b643bf44c9f4f8c2bf2d14a07a7"
+content-hash = "3f0de1ea45be5de2ae07e70719aba9ce1e23ea717f053716cccea204457377e3"
