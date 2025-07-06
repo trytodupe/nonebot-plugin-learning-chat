@@ -16,7 +16,7 @@ nonebot-plugin-apscheduler = "^0.5.0"
 tortoise-orm = ">=0.20.0"
 jieba = "^0.42.1"
 "ruamel.yaml" = "^0.17.21"
-amis-python = { git = "https://github.com/trytodupe/amis-python.git", rev = "72c584e213a85af65d891798227f7b9c79d7a91f"}
+amis-python = { git = "https://github.com/trytodupe/amis-python.git", rev = "b4e82bfa6c17fcf207542b1684a617a31a473092"}
 python-jose = "^3.3.0"
 nonebot-plugin-tortoise-orm = ">=0.1.1"
 
