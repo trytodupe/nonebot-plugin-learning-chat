@@ -324,8 +324,7 @@ class LearningChat:
             answer_dict = tuple(zip(candidate_answers, per_list))
             log_debug(
                 "群聊学习",
-                f'➤➤候选回复有<m>{"|".join([f"""{a.keywords}({round(p, 3)})""" for a, p in answer_dict])}|不回复({
-                    round(per_list[-1], 3)})</m>',
+                f"➤➤候选回复有<m>{'|'.join([f'{a.keywords}({round(p, 3)})' for a, p in answer_dict])}|不回复({round(per_list[-1], 3)})</m>",
             )
 
             if (
