@@ -22,7 +22,6 @@ from nonebot.typing import T_State
 from .handler import LearningChat
 from .models import ChatMessage
 from .config import config_manager, NICKNAME
-from . import web_api, web_page
 
 require("nonebot_plugin_apscheduler")
 from nonebot_plugin_apscheduler import scheduler

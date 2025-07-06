@@ -49,13 +49,6 @@ class ChatGroupConfig(BaseModel):
 
 class ChatConfig(BaseModel):
     total_enable: bool = Field(default=True, alias="群聊学习总开关")
-    enable_web: bool = Field(default=True, alias="启用后台管理")
-    web_username: str = Field(default="chat", alias="后台管理用户名")
-    web_password: str = Field(default="admin", alias="后台管理密码")
-    web_secret_key: str = Field(
-        default="49c294d32f69b732ef6447c18379451ce1738922a75cd1d4812ef150318a2ed0",
-        alias="后台管理token密钥",
-    )
     ban_words: List[str] = Field(default_factory=list, alias="全局屏蔽词")
     ban_users: List[int] = Field(default_factory=list, alias="全局屏蔽用户")
     KEYWORDS_SIZE: int = Field(default=3, alias="单句关键词分词数量")
