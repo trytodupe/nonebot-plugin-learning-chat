@@ -427,12 +427,18 @@ async def init_web():
 
     @app.get("/learning_chat/login", response_class=HTMLResponse)
     async def login_page_app():
-        return login_page.render(site_title="登录 | Learning-Chat 后台管理", theme="ang")
+        return login_page.render(
+            site_title="登录 | Learning-Chat 后台管理",
+            cdn='https://unpkg.com',
+            version="6.6.0",
+            theme="ang")
 
     @app.get("/learning_chat/admin", response_class=HTMLResponse)
     async def admin_page_app():
         return admin_app.render(
             site_title="Learning-Chat 后台管理",
+            cdn='https://unpkg.com',
+            version="6.6.0",
             theme="ang",
             requestAdaptor=requestAdaptor,
             responseAdaptor=responseAdaptor,
