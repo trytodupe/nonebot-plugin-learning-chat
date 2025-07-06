@@ -4,7 +4,7 @@ from pydantic import BaseModel, Field
 
 from nonebot import get_driver, logger
 from nonebot.utils import escape_tag
-from ruamel import yaml
+from ruamel.yaml import YAML
 
 CONFIG_PATH = Path() / "data" / "learning_chat" / "learning_chat.yml"
 CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
@@ -66,12 +66,13 @@ class ChatConfig(BaseModel):
 class ChatConfigManager:
     def __init__(self):
         self.file_path = CONFIG_PATH
+        self.yaml = YAML()
         if self.file_path.exists():
-            self.config = ChatConfig.parse_obj(
-                yaml.load(
-                    self.file_path.read_text(encoding="utf-8"), Loader=yaml.Loader
-                )
-            )
+            yaml_data = self.yaml.load(self.file_path.read_text(encoding="utf-8"))
+            if yaml_data is None:
+                self.config = ChatConfig()
+            else:
+                self.config = ChatConfig.parse_obj(yaml_data)
         else:
             self.config = ChatConfig()
         self.save()
@@ -87,13 +88,11 @@ class ChatConfigManager:
         return list(self.config.dict(by_alias=True).keys())
 
     def save(self):
+        self.yaml.indent(mapping=2, sequence=4, offset=2)
         with self.file_path.open("w", encoding="utf-8") as f:
-            yaml.dump(
+            self.yaml.dump(
                 self.config.dict(by_alias=True),
                 f,
-                indent=2,
-                Dumper=yaml.RoundTripDumper,
-                allow_unicode=True,
             )
 
 
