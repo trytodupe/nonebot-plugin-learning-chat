@@ -27,7 +27,7 @@ if "" in COMMAND_START:
 
 
 class ChatGroupConfig(BaseModel):
-    enable: bool = Field(default=True, alias="群聊学习开关")
+    enable: bool = Field(default=False, alias="群聊学习开关")
     ban_words: List[str] = Field(default_factory=list, alias="屏蔽词")
     ban_users: List[int] = Field(default_factory=list, alias="屏蔽用户")
     answer_threshold: int = Field(default=4, alias="回复阈值")
