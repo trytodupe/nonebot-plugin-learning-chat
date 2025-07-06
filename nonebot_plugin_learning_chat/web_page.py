@@ -71,7 +71,7 @@ global_config_form = Form(
     name="global_config",
     initApi="/learning_chat/api/chat_global_config",
     api="post:/learning_chat/api/chat_global_config",
-    interval=3000,
+    interval=None,
     body=[
         Switch(
             label="群聊学习总开关",
@@ -195,7 +195,7 @@ group_config_form = Form(
     visibleOn="group_id != null",
     initApi="/learning_chat/api/chat_group_config?group_id=${group_id}",
     api="post:/learning_chat/api/chat_group_config?group_id=${group_id}",
-    interval=3000,
+    interval=None,
     body=[
         Switch(
             label="群聊学习开关",
