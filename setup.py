@@ -11,7 +11,7 @@ setup(
         "tortoise-orm>=0.20.0",
         "jieba>=0.42.1,<1.0.0",
         "ruamel.yaml>=0.17.21,<1.0.0",
-        "amis-python @ git+https://github.com/trytodupe/amis-python.git@b975c99f888404a79e80a3ac66b52d2b979cd690",
+        "amis-python @ git+https://github.com/trytodupe/amis-python.git@cd0b7aa5f43e29e4b64c06d8b4d4e41fe4bebeaf",
         "python-jose>=3.3.0,<4.0.0",
         "nonebot-plugin-tortoise-orm>=0.1.1,<1.0.0",
     ],
