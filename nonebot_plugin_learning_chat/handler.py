@@ -177,7 +177,7 @@ class LearningChat:
         await self.data.save()
         if result == Result.Ban:
             # 禁用某句话
-            if self.role not in {"superuser", "admin", "owner"}:
+            if self.role not in {"superuser"}:
                 # 检查权限
                 return [random.choice(NO_PERMISSION_WORDS)]
             if self.reply:
@@ -190,7 +190,7 @@ class LearningChat:
                 return [random.choice(DOUBT_WORDS)]
         elif result in [Result.SetEnable, Result.SetDisable]:
             # 检查权限
-            if self.role not in {"superuser", "admin", "owner"}:
+            if self.role not in {"superuser"}:
                 return [random.choice(NO_PERMISSION_WORDS)]
             self.config.update(enable=(result == Result.SetEnable))
             config_manager.config.group_config[self.data.group_id] = self.config
