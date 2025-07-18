@@ -241,9 +241,9 @@ class LearningChat:
             return None
         else:
             # 回复
-            if self.data.is_plain_text and len(self.data.plain_text) <= 1:
-                log_debug("群聊学习", "➤➤消息过短，不回复")
-                return None
+            # if self.data.is_plain_text and len(self.data.plain_text) <= 1:
+            #     log_debug("群聊学习", "➤➤消息过短，不回复")
+            #     return None
             if not (
                 context := await ChatContext.filter(keywords=self.data.keywords).first()
             ):
