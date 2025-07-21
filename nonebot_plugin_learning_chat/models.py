@@ -60,7 +60,7 @@ class ChatMessage(Model):
     @cached_property
     def is_plain_text(self) -> bool:
         """是否纯文本"""
-        return "[CQ:" not in self.message
+        return "[CQ:" not in self.message and "[CQ:at" not in self.message and "[CQ:reply" not in self.message
 
     @cached_property
     def keyword_list(self) -> List[str]:
