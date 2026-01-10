@@ -82,6 +82,8 @@ class QueryFilter:
     time_after: Optional[int] = None
     time_before: Optional[int] = None
     limit: int = 20
+    # Whether absolute time was explicitly specified by user
+    has_absolute_time: bool = False
 
 
 @dataclass
@@ -325,7 +327,7 @@ class HotColdCache:
 
         Returns:
         - EXACT_MATCH: cache fully covers query time range
-        - FUZZY_TIME: cache.time_before is within 5 min of now (for queries without before)
+        - FUZZY_TIME: no absolute time specified, overlap >90%, uncovered <10min
         - PARTIAL_OVERLAP: ranges overlap >40%, can use incremental query
         - NO_MATCH: no usable overlap
         """
@@ -345,19 +347,35 @@ class HotColdCache:
         if time_covered:
             return CacheMatchType.EXACT_MATCH
 
-        # Check fuzzy time match (for queries without before)
-        if query.time_before is None and cache.time_before is not None:
-            now = time.time()
-            time_diff = now - cache.time_before
-            if 0 <= time_diff <= TIME_FUZZY_WINDOW:
-                # Also check time_after
-                if cache.time_after is not None:
-                    if query.time_after is None or query.time_after < cache.time_after:
-                        return CacheMatchType.NO_MATCH
+        # Calculate overlap metrics for fuzzy/partial matching
+        cache_start = cache.time_after or 0
+        cache_end = cache.time_before or int(time.time())
+        query_start = query.time_after or 0
+        query_end = query.time_before or int(time.time())
+
+        # Calculate overlap
+        overlap_start = max(cache_start, query_start)
+        overlap_end = min(cache_end, query_end)
+
+        if overlap_start >= overlap_end:
+            return CacheMatchType.NO_MATCH  # No overlap
+
+        overlap_duration = overlap_end - overlap_start
+        query_duration = query_end - query_start
+
+        if query_duration <= 0:
+            return CacheMatchType.NO_MATCH
+
+        overlap_ratio = overlap_duration / query_duration
+        uncovered_duration = query_duration - overlap_duration
+
+        # FUZZY_TIME: only when no absolute time specified by user
+        # Conditions: overlap >90% AND uncovered <10 minutes
+        if not query.has_absolute_time:
+            if overlap_ratio > 0.9 and uncovered_duration < 600:  # 10 minutes
                 return CacheMatchType.FUZZY_TIME
 
-        # Check partial overlap for incremental query
-        overlap_ratio = self._calculate_overlap_ratio(cache, query)
+        # PARTIAL_OVERLAP: overlap >40%, use incremental query
         if overlap_ratio >= OVERLAP_THRESHOLD:
             return CacheMatchType.PARTIAL_OVERLAP
 

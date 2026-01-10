@@ -65,16 +65,21 @@ def parse_query_args(arg_str: str) -> dict[str, str]:
     return result
 
 
-def parse_time(time_str: str) -> Optional[int]:
+def parse_time(time_str: str) -> tuple[Optional[int], bool]:
     """
     Parse time string to unix timestamp.
+
+    Returns:
+        Tuple of (timestamp, is_absolute).
+        timestamp is None if parsing failed.
+        is_absolute is True for absolute times (2025-01-01), False for relative (7d).
 
     Supports:
         - Relative: 7d, 24h, 30m (days, hours, minutes ago)
         - Absolute: 2025-01-01, 2025-01-01T12:00, 2025-01-01 12:00
     """
     if not time_str:
-        return None
+        return None, False
 
     # Relative time patterns
     relative_pattern = r"^(\d+)([dhm])$"
@@ -90,9 +95,9 @@ def parse_time(time_str: str) -> Optional[int]:
         elif unit == "m":
             delta = timedelta(minutes=amount)
         else:
-            return None
+            return None, False
 
-        return int((now - delta).timestamp())
+        return int((now - delta).timestamp()), False
 
     # Absolute time patterns
     formats = [
@@ -108,11 +113,11 @@ def parse_time(time_str: str) -> Optional[int]:
             dt = datetime.strptime(time_str, fmt)
             # Assume input is in UTC+8
             dt = dt.replace(tzinfo=TZ_UTC8)
-            return int(dt.timestamp())
+            return int(dt.timestamp()), True
         except ValueError:
             continue
 
-    return None
+    return None, False
 
 
 def format_timestamp(ts: int) -> str:
@@ -141,6 +146,8 @@ class QueryFilter:
         self.time_after: Optional[int] = None
         self.time_before: Optional[int] = None
         self.limit: int = DEFAULT_LIMIT
+        # Whether absolute time was explicitly specified by user
+        self.has_absolute_time: bool = False
 
     @classmethod
     def from_args(cls, args: dict[str, str]) -> "QueryFilter":
@@ -171,17 +178,23 @@ class QueryFilter:
                 raise ValueError(f"Invalid group ID: {args['group']}")
 
         if "after" in args:
-            f.time_after = parse_time(args["after"])
-            if f.time_after is None:
+            ts, is_abs = parse_time(args["after"])
+            if ts is None:
                 raise ValueError(f"Invalid time format for 'after': {args['after']}")
+            f.time_after = ts
+            if is_abs:
+                f.has_absolute_time = True
         else:
             # Default to 30 days ago
             f.time_after = int(time_module.time()) - DEFAULT_AFTER_DAYS * 24 * 3600
 
         if "before" in args:
-            f.time_before = parse_time(args["before"])
-            if f.time_before is None:
+            ts, is_abs = parse_time(args["before"])
+            if ts is None:
                 raise ValueError(f"Invalid time format for 'before': {args['before']}")
+            f.time_before = ts
+            if is_abs:
+                f.has_absolute_time = True
 
         if "limit" in args:
             try:
@@ -227,6 +240,7 @@ class QueryFilter:
             time_after=self.time_after,
             time_before=self.time_before,
             limit=self.limit,
+            has_absolute_time=self.has_absolute_time,
         )
 
 
