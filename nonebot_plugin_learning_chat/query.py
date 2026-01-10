@@ -331,9 +331,11 @@ async def execute_query_with_cache(
     if cache_result is not None:
         if not cache_result.needs_incremental:
             # Cache hit (exact or fuzzy) - 100% cached
+            # cache_result.messages is already filtered but without limit
+            # cache_result.total_count is the filtered count
             logger.info(f"Cache hit (fuzzy={cache_result.is_fuzzy})")
             return (
-                cache_result.messages[: qf.limit],
+                cache_result.messages[: qf.limit],  # Apply limit here
                 cache_result.total_count,
                 cache_result.is_fuzzy,
                 100,  # Full cache hit
@@ -596,8 +598,14 @@ async def handle_query(
         return
 
     if not messages:
+        # Format cache status for no results
+        cache_status = ""
+        if cache_percent is not None:
+            cache_status = (
+                f" ({cache_percent}% cached)" if cache_percent < 100 else " (cached)"
+            )
         await query_chat.finish(
-            f"Query: {qf.format_conditions()}\n\nNo messages found."
+            f"Query: {qf.format_conditions()}\n\nNo messages found.{cache_status}"
         )
         return
 

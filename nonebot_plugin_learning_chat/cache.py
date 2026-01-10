@@ -249,7 +249,7 @@ class HotColdCache:
             filtered = self._filter_results(cache, query)
             return CacheResult(
                 messages=filtered,
-                total_count=cache.total_count,
+                total_count=len(filtered),  # Use filtered count, not cache total
                 is_fuzzy=False,
                 needs_incremental=False,
             )
@@ -258,7 +258,7 @@ class HotColdCache:
             filtered = self._filter_results(cache, query)
             return CacheResult(
                 messages=filtered,
-                total_count=cache.total_count,
+                total_count=len(filtered),  # Use filtered count, not cache total
                 is_fuzzy=True,
                 needs_incremental=False,
             )
@@ -269,7 +269,7 @@ class HotColdCache:
                 filtered = self._filter_results(cache, query)
                 return CacheResult(
                     messages=filtered,
-                    total_count=cache.total_count,
+                    total_count=len(filtered),  # Use filtered count for partial
                     is_fuzzy=False,
                     needs_incremental=True,
                     missing_ranges=missing,
@@ -415,6 +415,7 @@ class HotColdCache:
         Filter cached messages to match query conditions.
 
         Used when cache is less restrictive than query.
+        Returns ALL matching messages (no limit applied).
         """
         results = cache.messages
 
@@ -434,8 +435,8 @@ class HotColdCache:
         if query.time_before is not None:
             results = [m for m in results if m.time <= query.time_before]
 
-        # Apply limit
-        return results[: query.limit]
+        # Do NOT apply limit here - let caller handle it
+        return results
 
     def clear(self) -> None:
         """Clear all cache entries."""
