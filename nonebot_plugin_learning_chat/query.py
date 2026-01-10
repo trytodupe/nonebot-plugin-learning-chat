@@ -17,10 +17,10 @@ from nonebot import on_command, logger
 from nonebot.adapters.onebot.v11 import (
     GroupMessageEvent,
     PrivateMessageEvent,
-    MessageEvent,
 )
 from nonebot.params import CommandArg
 from nonebot.adapters.onebot.v11 import Message
+from nonebot_plugin_uninfo import QryItrface, SceneType
 
 from .models import ChatMessage
 from .config import SUPERUSERS
@@ -205,8 +205,11 @@ class QueryFilter:
         return " | ".join(parts)
 
 
-async def execute_query(qf: QueryFilter) -> list[ChatMessage]:
-    """Execute query against database."""
+async def execute_query(qf: QueryFilter) -> tuple[list[ChatMessage], int]:
+    """
+    Execute query against database.
+    Returns (messages limited by qf.limit, total_count of all matches).
+    """
     # Build base query
     base_query = ChatMessage.filter(group_id=qf.group_id)
 
@@ -225,15 +228,18 @@ async def execute_query(qf: QueryFilter) -> list[ChatMessage]:
 
     # If no content/regex filter, simple query with limit
     if not qf.content and not qf.regex:
+        # Get total count
+        total_count = await base_query.count()
         query = base_query.limit(qf.limit)
         logger.info(f"Query SQL: {query.sql(params_inline=True)}")
-        return await query
+        messages = await query
+        return messages, total_count
 
-    # With content/regex filter, use batch iteration to ensure enough results
+    # With content/regex filter, use batch iteration to find ALL matches
     BATCH_SIZE = 5000
     MAX_BATCHES = 20  # Safety limit: max 100k records scanned
 
-    result = []
+    all_matches = []
     regex_pattern = re.compile(qf.regex) if qf.regex else None
     offset = 0
 
@@ -246,7 +252,8 @@ async def execute_query(qf: QueryFilter) -> list[ChatMessage]:
             break  # No more data
 
         for msg in batch:
-            text = msg.plain_text or msg.message
+            # Use message field for matching
+            text = msg.message
 
             if qf.content and qf.content not in text:
                 continue
@@ -254,34 +261,62 @@ async def execute_query(qf: QueryFilter) -> list[ChatMessage]:
             if regex_pattern and not regex_pattern.search(text):
                 continue
 
-            result.append(msg)
-
-            if len(result) >= qf.limit:
-                return result
+            all_matches.append(msg)
 
         offset += BATCH_SIZE
 
-    return result
+    total_count = len(all_matches)
+    return all_matches[: qf.limit], total_count
 
 
-def format_results(
-    qf: QueryFilter, messages: list[ChatMessage], show_user: bool = True
+async def format_results(
+    qf: QueryFilter,
+    messages: list[ChatMessage],
+    total_count: int,
+    show_user: bool = True,
+    user_names: dict[int, str] | None = None,
 ) -> str:
     """Format query results for display."""
     lines = [f"Query: {qf.format_conditions()}"]
-    lines.append(f"Found: {len(messages)} messages")
+    lines.append(f"Found: {total_count} messages (showing {len(messages)})")
     lines.append("-" * 40)
 
     for msg in messages:
         time_str = format_timestamp(msg.time)
-        text = truncate_message(msg.plain_text or msg.message)
+        text = truncate_message(msg.message)
 
         if show_user:
-            lines.append(f"[{time_str}] {msg.user_id}: {text}")
+            # Use nickname if available, otherwise fallback to user_id
+            user_display = (
+                user_names.get(msg.user_id, str(msg.user_id))
+                if user_names
+                else str(msg.user_id)
+            )
+            lines.append(f"[{time_str}] {user_display}: {text}")
         else:
             lines.append(f"[{time_str}] {text}")
 
     return "\n".join(lines)
+
+
+async def get_group_member_names(
+    interface: QryItrface, group_id: int, user_ids: set[int]
+) -> dict[int, str]:
+    """Fetch member nicknames for given user IDs in a group."""
+    user_names: dict[int, str] = {}
+
+    try:
+        members = await interface.get_members(SceneType.GROUP, str(group_id))
+        for member in members:
+            uid = int(member.user.id)
+            if uid in user_ids:
+                # Prefer member nick, then user name, then user id
+                name = member.nick or member.user.name or str(uid)
+                user_names[uid] = name
+    except Exception as e:
+        logger.warning(f"Failed to fetch member names: {e}")
+
+    return user_names
 
 
 # Create command handler
@@ -292,6 +327,7 @@ query_chat = on_command("query_chat", priority=10, block=True)
 async def handle_query(
     event: Union[GroupMessageEvent, PrivateMessageEvent],
     args: Message = CommandArg(),
+    interface: QryItrface = None,
 ):
     """Handle query_chat command."""
     arg_str = args.extract_plain_text().strip()
@@ -314,7 +350,8 @@ async def handle_query(
         return
 
     # Permission and group_id handling
-    if isinstance(event, GroupMessageEvent):
+    is_group = isinstance(event, GroupMessageEvent)
+    if is_group:
         # In group chat: use current group, available to all
         qf.group_id = event.group_id
         show_user = qf.user_id is None  # Show user if not filtering by user
@@ -337,7 +374,7 @@ async def handle_query(
 
     # Execute query
     try:
-        messages = await execute_query(qf)
+        messages, total_count = await execute_query(qf)
     except Exception as e:
         logger.exception("Query execution failed")
         await query_chat.finish(f"Query failed: {e}")
@@ -349,8 +386,16 @@ async def handle_query(
         )
         return
 
+    # Fetch user nicknames for group chat
+    user_names: dict[int, str] | None = None
+    if is_group and show_user and interface and qf.group_id:
+        user_ids = {msg.user_id for msg in messages}
+        user_names = await get_group_member_names(interface, qf.group_id, user_ids)
+
     # Format and send results
-    result_text = format_results(qf, messages, show_user=show_user)
+    result_text = await format_results(
+        qf, messages, total_count, show_user=show_user, user_names=user_names
+    )
 
     # Truncate if too long (QQ message limit)
     if len(result_text) > 4000:
