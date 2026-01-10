@@ -252,8 +252,8 @@ async def execute_query(qf: QueryFilter) -> tuple[list[ChatMessage], int]:
             break  # No more data
 
         for msg in batch:
-            # Use message field for matching
-            text = msg.message
+            # Use plain_text for matching (falls back to message if empty)
+            text = msg.plain_text or msg.message
 
             if qf.content and qf.content not in text:
                 continue
@@ -283,7 +283,7 @@ async def format_results(
 
     for msg in messages:
         time_str = format_timestamp(msg.time)
-        text = truncate_message(msg.message)
+        text = truncate_message(msg.plain_text or msg.message)
 
         if show_user:
             # Use nickname if available, otherwise fallback to user_id
