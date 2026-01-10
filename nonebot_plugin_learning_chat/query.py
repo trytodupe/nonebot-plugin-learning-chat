@@ -223,7 +223,12 @@ async def execute_query(qf: QueryFilter) -> list[ChatMessage]:
     # Order by time descending and apply limit
     # We fetch more than limit to allow for content/regex filtering
     fetch_limit = qf.limit * 10 if (qf.content or qf.regex) else qf.limit
-    messages = await query.order_by("-time").limit(fetch_limit)
+    query = query.order_by("-time").limit(fetch_limit)
+
+    # Log the SQL query
+    logger.info(f"Query SQL: {query.sql()}")
+
+    messages = await query
 
     # Apply content/regex filter in Python (SQLite doesn't have good regex support)
     result = []
