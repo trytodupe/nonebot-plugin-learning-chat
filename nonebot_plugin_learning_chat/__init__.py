@@ -22,7 +22,6 @@ from nonebot.typing import T_State
 from .handler import LearningChat
 from .models import ChatMessage
 from .config import config_manager, NICKNAME
-from .query import query_chat  # noqa: F401 - register command
 
 require("nonebot_plugin_apscheduler")
 from nonebot_plugin_apscheduler import scheduler
@@ -36,6 +35,9 @@ __plugin_meta__ = PluginMetadata(
     supported_adapters={"~onebot.v11"},
     extra={"author": "惜月"},
 )
+
+# Import query_chat after __plugin_meta__ to ensure proper plugin association
+from .query import query_chat  # noqa: F401
 
 
 async def ChatRule(event: GroupMessageEvent, state: T_State) -> bool:
