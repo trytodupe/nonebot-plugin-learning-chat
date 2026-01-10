@@ -195,6 +195,10 @@ class QueryFilter:
             f.time_before = ts
             if is_abs:
                 f.has_absolute_time = True
+        else:
+            # Always normalize time_before to current time when not specified
+            # This ensures cache matching works consistently without special-casing None
+            f.time_before = int(time_module.time())
 
         if "limit" in args:
             try:
@@ -289,13 +293,13 @@ async def execute_query_raw(
 
     # With content/regex filter, use batch iteration
     BATCH_SIZE = 5000
-    MAX_BATCHES = 20  # Safety limit: max 100k records scanned
 
     all_matches: list[ChatMessage] = []
     regex_pattern = re.compile(qf.regex) if qf.regex else None
     offset = 0
+    batch_num = 0
 
-    for batch_num in range(MAX_BATCHES):
+    while True:
         query = base_query.offset(offset).limit(BATCH_SIZE)
         logger.info(f"Query SQL: {query.sql(params_inline=True)}")
 
@@ -327,6 +331,7 @@ async def execute_query_raw(
             break
 
         offset += BATCH_SIZE
+        batch_num += 1
 
     return all_matches
 
