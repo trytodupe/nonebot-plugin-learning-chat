@@ -22,6 +22,7 @@ from nonebot.typing import T_State
 from .handler import LearningChat
 from .models import ChatMessage
 from .config import config_manager, NICKNAME
+from .query import query_chat  # noqa: F401 - register command
 
 require("nonebot_plugin_apscheduler")
 from nonebot_plugin_apscheduler import scheduler
@@ -63,7 +64,8 @@ async def _(event: GroupMessageEvent, answers=Arg("answers")):
     for answer in answers:
         try:
             logger.info(
-                "群聊学习", f'{NICKNAME}将向群<m>{event.group_id}</m>回复<m>"{answer}"</m>'
+                "群聊学习",
+                f'{NICKNAME}将向群<m>{event.group_id}</m>回复<m>"{answer}"</m>',
             )
             msg = await learning_chat.send(Message(answer))
             await ChatMessage.create(
@@ -99,7 +101,9 @@ async def speak_up():
     group_id, messages = speak
     for msg in messages:
         try:
-            logger.info("群聊学习", f'{NICKNAME}向群<m>{group_id}</m>主动发言<m>"{msg}"</m>')
+            logger.info(
+                "群聊学习", f'{NICKNAME}向群<m>{group_id}</m>主动发言<m>"{msg}"</m>'
+            )
             send_result = await bot.send_group_msg(
                 group_id=group_id, message=Message(msg)
             )
