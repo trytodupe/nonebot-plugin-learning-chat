@@ -225,11 +225,8 @@ async def execute_query(qf: QueryFilter) -> list[ChatMessage]:
     fetch_limit = qf.limit * 10 if (qf.content or qf.regex) else qf.limit
     query = query.order_by("-time").limit(fetch_limit)
 
-    # Log the query filters for debugging
-    logger.info(
-        f"Query: group_id={qf.group_id}, user_id={qf.user_id}, "
-        f"time_after={qf.time_after}, time_before={qf.time_before}, limit={fetch_limit}"
-    )
+    # Log the SQL query with actual parameter values
+    logger.info(f"Query SQL: {query.sql(params_inline=True)}")
 
     messages = await query
 
