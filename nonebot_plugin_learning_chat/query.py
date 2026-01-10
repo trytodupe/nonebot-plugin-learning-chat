@@ -208,46 +208,58 @@ class QueryFilter:
 async def execute_query(qf: QueryFilter) -> list[ChatMessage]:
     """Execute query against database."""
     # Build base query
-    query = ChatMessage.filter(group_id=qf.group_id)
+    base_query = ChatMessage.filter(group_id=qf.group_id)
 
     # Apply time filters
     if qf.time_after:
-        query = query.filter(time__gte=qf.time_after)
+        base_query = base_query.filter(time__gte=qf.time_after)
     if qf.time_before:
-        query = query.filter(time__lte=qf.time_before)
+        base_query = base_query.filter(time__lte=qf.time_before)
 
     # Apply user filter
     if qf.user_id:
-        query = query.filter(user_id=qf.user_id)
+        base_query = base_query.filter(user_id=qf.user_id)
 
-    # Order by time descending and apply limit
-    # We fetch more than limit to allow for content/regex filtering
-    fetch_limit = qf.limit * 10 if (qf.content or qf.regex) else qf.limit
-    query = query.order_by("-time").limit(fetch_limit)
+    # Order by time descending
+    base_query = base_query.order_by("-time")
 
-    # Log the SQL query with actual parameter values
-    logger.info(f"Query SQL: {query.sql(params_inline=True)}")
+    # If no content/regex filter, simple query with limit
+    if not qf.content and not qf.regex:
+        query = base_query.limit(qf.limit)
+        logger.info(f"Query SQL: {query.sql(params_inline=True)}")
+        return await query
 
-    messages = await query
+    # With content/regex filter, use batch iteration to ensure enough results
+    BATCH_SIZE = 5000
+    MAX_BATCHES = 20  # Safety limit: max 100k records scanned
 
-    # Apply content/regex filter in Python (SQLite doesn't have good regex support)
     result = []
     regex_pattern = re.compile(qf.regex) if qf.regex else None
+    offset = 0
 
-    for msg in messages:
-        # Use plain_text for matching
-        text = msg.plain_text or msg.message
+    for _ in range(MAX_BATCHES):
+        query = base_query.offset(offset).limit(BATCH_SIZE)
+        logger.info(f"Query SQL: {query.sql(params_inline=True)}")
 
-        if qf.content and qf.content not in text:
-            continue
+        batch = await query
+        if not batch:
+            break  # No more data
 
-        if regex_pattern and not regex_pattern.search(text):
-            continue
+        for msg in batch:
+            text = msg.plain_text or msg.message
 
-        result.append(msg)
+            if qf.content and qf.content not in text:
+                continue
 
-        if len(result) >= qf.limit:
-            break
+            if regex_pattern and not regex_pattern.search(text):
+                continue
+
+            result.append(msg)
+
+            if len(result) >= qf.limit:
+                return result
+
+        offset += BATCH_SIZE
 
     return result
 
