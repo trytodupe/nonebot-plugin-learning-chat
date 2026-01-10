@@ -2,14 +2,15 @@
 Query command for searching chat messages.
 
 Usage:
-    /query_chat content="keyword" [user=123456] [after=2025-01-01] [before=2025-01-10] [limit=50]
-    /query_chat regex="pattern.*" [user=123456] [after=7d] [limit=50]
+    /query_chat content="keyword" [user=123456] [after=2025-01-01] [before=2025-01-10] [limit=20]
+    /query_chat regex="pattern.*" [user=123456] [after=7d] [limit=20]
 
 In group chat: Only queries current group's messages, available to all users.
 In private chat: Only available to superusers, must specify group=<group_id>.
 """
 
 import re
+import time as time_module
 from datetime import datetime, timedelta, timezone
 from typing import Optional, Union
 
@@ -24,14 +25,23 @@ from nonebot_plugin_uninfo import QryItrface, SceneType
 
 from .models import ChatMessage
 from .config import SUPERUSERS
+from .cache import (
+    CacheEntry,
+    CacheResult,
+    HotColdCache,
+    QueryFilter as CacheQueryFilter,
+    get_query_cache,
+    MAX_MESSAGES_PER_ENTRY,
+)
 
 
 # UTC+8 timezone
 TZ_UTC8 = timezone(timedelta(hours=8))
 
 # Default and max limits
-DEFAULT_LIMIT = 50
+DEFAULT_LIMIT = 20
 MAX_LIMIT = 200
+DEFAULT_AFTER_DAYS = 30  # Default to 30 days ago
 
 
 def parse_query_args(arg_str: str) -> dict[str, str]:
@@ -164,6 +174,9 @@ class QueryFilter:
             f.time_after = parse_time(args["after"])
             if f.time_after is None:
                 raise ValueError(f"Invalid time format for 'after': {args['after']}")
+        else:
+            # Default to 30 days ago
+            f.time_after = int(time_module.time()) - DEFAULT_AFTER_DAYS * 24 * 3600
 
         if "before" in args:
             f.time_before = parse_time(args["before"])
@@ -204,20 +217,48 @@ class QueryFilter:
 
         return " | ".join(parts)
 
+    def to_cache_filter(self) -> CacheQueryFilter:
+        """Convert to cache module's QueryFilter."""
+        return CacheQueryFilter(
+            group_id=self.group_id,
+            user_id=self.user_id,
+            content=self.content,
+            regex=self.regex,
+            time_after=self.time_after,
+            time_before=self.time_before,
+            limit=self.limit,
+        )
 
-async def execute_query(qf: QueryFilter) -> tuple[list[ChatMessage], int]:
+
+async def execute_query_raw(
+    qf: QueryFilter,
+    time_after_override: Optional[int] = None,
+    time_before_override: Optional[int] = None,
+) -> list[ChatMessage]:
     """
-    Execute query against database.
-    Returns (messages limited by qf.limit, total_count of all matches).
+    Execute query against database without caching.
+    Returns all matching messages (up to MAX_MESSAGES_PER_ENTRY).
+
+    Args:
+        qf: Query filter
+        time_after_override: Override time_after for incremental queries
+        time_before_override: Override time_before for incremental queries
     """
     # Build base query
     base_query = ChatMessage.filter(group_id=qf.group_id)
 
-    # Apply time filters
-    if qf.time_after:
-        base_query = base_query.filter(time__gte=qf.time_after)
-    if qf.time_before:
-        base_query = base_query.filter(time__lte=qf.time_before)
+    # Apply time filters (with optional overrides)
+    time_after = (
+        time_after_override if time_after_override is not None else qf.time_after
+    )
+    time_before = (
+        time_before_override if time_before_override is not None else qf.time_before
+    )
+
+    if time_after:
+        base_query = base_query.filter(time__gte=time_after)
+    if time_before:
+        base_query = base_query.filter(time__lte=time_before)
 
     # Apply user filter
     if qf.user_id:
@@ -226,20 +267,17 @@ async def execute_query(qf: QueryFilter) -> tuple[list[ChatMessage], int]:
     # Order by time descending
     base_query = base_query.order_by("-time")
 
-    # If no content/regex filter, simple query with limit
+    # If no content/regex filter, simple query
     if not qf.content and not qf.regex:
-        # Get total count
-        total_count = await base_query.count()
-        query = base_query.limit(qf.limit)
+        query = base_query.limit(MAX_MESSAGES_PER_ENTRY)
         logger.info(f"Query SQL: {query.sql(params_inline=True)}")
-        messages = await query
-        return messages, total_count
+        return await query
 
-    # With content/regex filter, use batch iteration to find ALL matches
+    # With content/regex filter, use batch iteration
     BATCH_SIZE = 5000
     MAX_BATCHES = 20  # Safety limit: max 100k records scanned
 
-    all_matches = []
+    all_matches: list[ChatMessage] = []
     regex_pattern = re.compile(qf.regex) if qf.regex else None
     offset = 0
 
@@ -263,10 +301,149 @@ async def execute_query(qf: QueryFilter) -> tuple[list[ChatMessage], int]:
 
             all_matches.append(msg)
 
+            # Stop if we have enough
+            if len(all_matches) >= MAX_MESSAGES_PER_ENTRY:
+                return all_matches
+
         offset += BATCH_SIZE
 
-    total_count = len(all_matches)
-    return all_matches[: qf.limit], total_count
+    return all_matches
+
+
+async def execute_query_with_cache(
+    qf: QueryFilter,
+) -> tuple[list[ChatMessage], int, bool, Optional[int]]:
+    """
+    Execute query with cache support.
+
+    Returns: (messages, total_count, is_fuzzy, cache_percent)
+        - messages: Limited by qf.limit
+        - total_count: Total matching messages
+        - is_fuzzy: True if result is from fuzzy time match (display ~)
+        - cache_percent: None if no cache, 100 if full cache hit, 0-99 if partial
+    """
+    cache = get_query_cache()
+    cache_filter = qf.to_cache_filter()
+
+    # Try cache lookup
+    cache_result = cache.get(cache_filter)
+
+    if cache_result is not None:
+        if not cache_result.needs_incremental:
+            # Cache hit (exact or fuzzy) - 100% cached
+            logger.info(f"Cache hit (fuzzy={cache_result.is_fuzzy})")
+            return (
+                cache_result.messages[: qf.limit],
+                cache_result.total_count,
+                cache_result.is_fuzzy,
+                100,  # Full cache hit
+            )
+
+        # Incremental query needed
+        logger.info(
+            f"Cache partial hit, incremental query for: {cache_result.missing_ranges}"
+        )
+        return await _execute_incremental_query(qf, cache_result, cache)
+
+    # Cache miss, execute full query
+    logger.info("Cache miss, executing full query")
+    all_messages = await execute_query_raw(qf)
+
+    # Store in cache
+    entry = CacheEntry(
+        group_id=qf.group_id,  # type: ignore
+        user_id=qf.user_id,
+        content=qf.content,
+        regex=qf.regex,
+        time_after=qf.time_after,
+        time_before=qf.time_before,
+        messages=all_messages,
+        total_count=len(all_messages),
+        cached_at=time_module.time(),
+    )
+    cache.put(entry)
+
+    return all_messages[: qf.limit], len(all_messages), False, None  # No cache
+
+
+async def _execute_incremental_query(
+    qf: QueryFilter,
+    cache_result: CacheResult,
+    cache: HotColdCache,
+) -> tuple[list[ChatMessage], int, bool, int]:
+    """
+    Execute incremental query and merge with cached results.
+    Returns cache_percent based on how much was from cache.
+    """
+    # Get cached messages
+    cached_messages = list(cache_result.messages)
+    cached_count = len(cached_messages)
+
+    # Query missing ranges
+    incremental_messages: list[ChatMessage] = []
+    for start, end in cache_result.missing_ranges:
+        batch = await execute_query_raw(
+            qf, time_after_override=start, time_before_override=end
+        )
+        incremental_messages.extend(batch)
+
+    # Merge and deduplicate by message_id
+    all_messages = cached_messages + incremental_messages
+    seen_ids: set[int] = set()
+    unique_messages: list[ChatMessage] = []
+
+    for msg in all_messages:
+        if msg.message_id not in seen_ids:
+            seen_ids.add(msg.message_id)
+            unique_messages.append(msg)
+
+    # Sort by time descending
+    unique_messages.sort(key=lambda m: m.time, reverse=True)
+
+    # Limit to max cache size
+    if len(unique_messages) > MAX_MESSAGES_PER_ENTRY:
+        unique_messages = unique_messages[:MAX_MESSAGES_PER_ENTRY]
+
+    # Calculate cache percentage
+    total_count = len(unique_messages)
+    cache_percent = int(cached_count * 100 / total_count) if total_count > 0 else 0
+
+    # Calculate merged time range
+    old_entry = cache_result.cache_entry
+    if old_entry:
+        merged_time_after = min(
+            old_entry.time_after or float("inf"),
+            qf.time_after or float("inf"),
+        )
+        merged_time_before = max(
+            old_entry.time_before or 0,
+            qf.time_before or 0,
+        )
+
+        # Convert to int (handle float('inf'))
+        merged_time_after = (
+            int(merged_time_after) if merged_time_after != float("inf") else None
+        )
+        merged_time_before = (
+            int(merged_time_before) if merged_time_before != 0 else None
+        )
+
+        # Update cache with merged entry
+        old_key = old_entry.make_key()
+        new_entry = CacheEntry(
+            group_id=qf.group_id,  # type: ignore
+            user_id=qf.user_id,
+            content=qf.content,
+            regex=qf.regex,
+            time_after=merged_time_after,
+            time_before=merged_time_before,
+            messages=unique_messages,
+            total_count=len(unique_messages),
+            cached_at=time_module.time(),
+        )
+        cache.update_entry(old_key, new_entry)
+
+    return unique_messages[: qf.limit], len(unique_messages), False, cache_percent
 
 
 async def format_results(
@@ -275,10 +452,29 @@ async def format_results(
     total_count: int,
     show_user: bool = True,
     user_names: dict[int, str] | None = None,
+    is_fuzzy: bool = False,
+    cache_percent: Optional[int] = None,
 ) -> str:
     """Format query results for display."""
     lines = [f"Query: {qf.format_conditions()}"]
-    lines.append(f"Found: {total_count} messages (showing {len(messages)})")
+
+    # Format count line based on cache status
+    count_prefix = "~" if is_fuzzy else ""
+    if cache_percent is not None:
+        if cache_percent == 100:
+            # Full cache hit
+            lines.append(
+                f"Showing {len(messages)}/{count_prefix}{total_count} (cached)"
+            )
+        else:
+            # Partial cache hit
+            lines.append(
+                f"Showing {len(messages)}/{count_prefix}{total_count} ({cache_percent}% cached)"
+            )
+    else:
+        # No cache
+        lines.append(f"Showing {len(messages)}/{total_count}")
+
     lines.append("-" * 40)
 
     for msg in messages:
@@ -344,7 +540,7 @@ async def handle_query(
     if not qf.has_message_filter():
         await query_chat.finish(
             "Error: Must specify at least 'content' or 'regex' parameter.\n"
-            'Usage: /query_chat content="keyword" [user=123] [after=7d] [limit=50]\n'
+            'Usage: /query_chat content="keyword" [user=123] [after=7d] [limit=20]\n'
             '       /query_chat regex="pattern.*" [user=123]'
         )
         return
@@ -372,9 +568,11 @@ async def handle_query(
 
         show_user = qf.user_id is None
 
-    # Execute query
+    # Execute query with cache
     try:
-        messages, total_count = await execute_query(qf)
+        messages, total_count, is_fuzzy, cache_percent = await execute_query_with_cache(
+            qf
+        )
     except Exception as e:
         logger.exception("Query execution failed")
         await query_chat.finish(f"Query failed: {e}")
@@ -394,7 +592,13 @@ async def handle_query(
 
     # Format and send results
     result_text = await format_results(
-        qf, messages, total_count, show_user=show_user, user_names=user_names
+        qf,
+        messages,
+        total_count,
+        show_user=show_user,
+        user_names=user_names,
+        is_fuzzy=is_fuzzy,
+        cache_percent=cache_percent,
     )
 
     # Truncate if too long (QQ message limit)
