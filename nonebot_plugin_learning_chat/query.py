@@ -281,11 +281,14 @@ async def execute_query_raw(
     regex_pattern = re.compile(qf.regex) if qf.regex else None
     offset = 0
 
-    for _ in range(MAX_BATCHES):
+    for batch_num in range(MAX_BATCHES):
         query = base_query.offset(offset).limit(BATCH_SIZE)
         logger.info(f"Query SQL: {query.sql(params_inline=True)}")
 
         batch = await query
+        batch_size = len(batch)
+        logger.debug(f"Batch {batch_num}: got {batch_size} records")
+
         if not batch:
             break  # No more data
 
@@ -304,6 +307,10 @@ async def execute_query_raw(
             # Stop if we have enough
             if len(all_matches) >= MAX_MESSAGES_PER_ENTRY:
                 return all_matches
+
+        # If batch returned less than BATCH_SIZE, no more data to fetch
+        if batch_size < BATCH_SIZE:
+            break
 
         offset += BATCH_SIZE
 
