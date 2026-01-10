@@ -135,12 +135,19 @@ class HotColdCache:
                 logger.error(f"Failed to load cache: {e}")
                 self.cold_cache = OrderedDict()
 
-    def _save_cold_to_file(self) -> None:
-        """Save cold cache to file."""
+    def _save_to_file(self) -> None:
+        """Save all cache entries (hot + cold) to file."""
         try:
             self.cache_file.parent.mkdir(parents=True, exist_ok=True)
+            # Merge hot and cold for persistence
+            # Cold entries first, then hot (hot will overwrite if same key)
+            all_entries: OrderedDict[str, CacheEntry] = OrderedDict()
+            for key, entry in self.cold_cache.items():
+                all_entries[key] = entry
+            for key, entry in self.hot_cache.items():
+                all_entries[key] = entry
             with open(self.cache_file, "wb") as f:
-                pickle.dump(self.cold_cache, f)
+                pickle.dump(all_entries, f)
         except Exception as e:
             logger.error(f"Failed to save cache: {e}")
 
@@ -198,8 +205,8 @@ class HotColdCache:
         while len(self.cold_cache) > self.cold_size:
             self.cold_cache.popitem(last=True)
 
-        # Persist cold cache
-        self._save_cold_to_file()
+        # Persist cache
+        self._save_to_file()
 
     def update_entry(self, old_key: str, new_entry: CacheEntry) -> None:
         """
@@ -230,7 +237,7 @@ class HotColdCache:
             self.cold_cache.move_to_end(old_key, last=False)
 
         # Persist
-        self._save_cold_to_file()
+        self._save_to_file()
 
     def _try_match(
         self, cache: CacheEntry, query: QueryFilter
@@ -442,7 +449,7 @@ class HotColdCache:
         """Clear all cache entries."""
         self.hot_cache.clear()
         self.cold_cache.clear()
-        self._save_cold_to_file()
+        self._save_to_file()
 
     def stats(self) -> dict:
         """Return cache statistics."""
