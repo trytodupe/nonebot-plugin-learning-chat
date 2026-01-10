@@ -375,9 +375,16 @@ async def _execute_incremental_query(
     Execute incremental query and merge with cached results.
     Returns cache_percent based on how much was from cache.
     """
-    # Get cached messages
-    cached_messages = list(cache_result.messages)
-    cached_count = len(cached_messages)
+    # Get original cache entry for full data
+    old_entry = cache_result.cache_entry
+    if not old_entry:
+        # Fallback: no cache entry, just query fresh
+        all_messages = await execute_query_raw(qf)
+        return all_messages[: qf.limit], len(all_messages), False, 0
+
+    # Get ALL cached messages (not filtered), for merging
+    cached_messages = list(old_entry.messages)
+    cached_total = old_entry.total_count
 
     # Query missing ranges
     incremental_messages: list[ChatMessage] = []
@@ -386,6 +393,8 @@ async def _execute_incremental_query(
             qf, time_after_override=start, time_before_override=end
         )
         incremental_messages.extend(batch)
+
+    incremental_count = len(incremental_messages)
 
     # Merge and deduplicate by message_id
     all_messages = cached_messages + incremental_messages
@@ -404,46 +413,54 @@ async def _execute_incremental_query(
     if len(unique_messages) > MAX_MESSAGES_PER_ENTRY:
         unique_messages = unique_messages[:MAX_MESSAGES_PER_ENTRY]
 
-    # Calculate cache percentage
+    # Total count is the merged unique count
     total_count = len(unique_messages)
-    cache_percent = int(cached_count * 100 / total_count) if total_count > 0 else 0
+
+    # Calculate cache percentage based on original cached vs incremental
+    # Use the proportion of cached messages in the final result
+    cache_percent = int(cached_total * 100 / total_count) if total_count > 0 else 0
+    cache_percent = min(cache_percent, 99)  # Cap at 99% since we did query something
 
     # Calculate merged time range
-    old_entry = cache_result.cache_entry
-    if old_entry:
-        merged_time_after = min(
-            old_entry.time_after or float("inf"),
-            qf.time_after or float("inf"),
-        )
-        merged_time_before = max(
-            old_entry.time_before or 0,
-            qf.time_before or 0,
-        )
+    merged_time_after = min(
+        old_entry.time_after or float("inf"),
+        qf.time_after or float("inf"),
+    )
+    merged_time_before = max(
+        old_entry.time_before or 0,
+        qf.time_before or 0,
+    )
 
-        # Convert to int (handle float('inf'))
-        merged_time_after = (
-            int(merged_time_after) if merged_time_after != float("inf") else None
-        )
-        merged_time_before = (
-            int(merged_time_before) if merged_time_before != 0 else None
-        )
+    # Convert to int (handle float('inf'))
+    merged_time_after = (
+        int(merged_time_after) if merged_time_after != float("inf") else None
+    )
+    merged_time_before = int(merged_time_before) if merged_time_before != 0 else None
 
-        # Update cache with merged entry
-        old_key = old_entry.make_key()
-        new_entry = CacheEntry(
-            group_id=qf.group_id,  # type: ignore
-            user_id=qf.user_id,
-            content=qf.content,
-            regex=qf.regex,
-            time_after=merged_time_after,
-            time_before=merged_time_before,
-            messages=unique_messages,
-            total_count=len(unique_messages),
-            cached_at=time_module.time(),
-        )
-        cache.update_entry(old_key, new_entry)
+    # Update cache with merged entry
+    old_key = old_entry.make_key()
+    new_entry = CacheEntry(
+        group_id=qf.group_id,  # type: ignore
+        user_id=qf.user_id,
+        content=qf.content,
+        regex=qf.regex,
+        time_after=merged_time_after,
+        time_before=merged_time_before,
+        messages=unique_messages,
+        total_count=total_count,
+        cached_at=time_module.time(),
+    )
+    cache.update_entry(old_key, new_entry)
 
-    return unique_messages[: qf.limit], len(unique_messages), False, cache_percent
+    # Filter for current query's time range and limit
+    filtered_messages = [
+        m
+        for m in unique_messages
+        if (qf.time_after is None or m.time >= qf.time_after)
+        and (qf.time_before is None or m.time <= qf.time_before)
+    ]
+
+    return filtered_messages[: qf.limit], len(filtered_messages), False, cache_percent
 
 
 async def format_results(
