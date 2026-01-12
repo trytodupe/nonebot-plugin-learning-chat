@@ -349,7 +349,10 @@ class HotColdCache:
 
         # Calculate overlap metrics for fuzzy/partial matching
         cache_start = cache.time_after or 0
-        cache_end = cache.time_before or int(time.time())
+        # If cache.time_before is None, the cache only covers up to cached_at (not "now").
+        cache_end = (
+            cache.time_before if cache.time_before is not None else int(cache.cached_at)
+        )
         query_start = query.time_after or 0
         query_end = query.time_before or int(time.time())
 
@@ -389,7 +392,10 @@ class HotColdCache:
         """
         # Get effective time ranges
         cache_start = cache.time_after or 0
-        cache_end = cache.time_before or int(time.time())
+        # If cache.time_before is None, the cache only covers up to cached_at (not "now").
+        cache_end = (
+            cache.time_before if cache.time_before is not None else int(cache.cached_at)
+        )
         query_start = query.time_after or 0
         query_end = query.time_before or int(time.time())
 
@@ -417,7 +423,10 @@ class HotColdCache:
         Returns list of (start, end) tuples.
         """
         cache_start = cache.time_after or 0
-        cache_end = cache.time_before or int(time.time())
+        # If cache.time_before is None, the cache only covers up to cached_at (not "now").
+        cache_end = (
+            cache.time_before if cache.time_before is not None else int(cache.cached_at)
+        )
         query_start = query.time_after or 0
         query_end = query.time_before or int(time.time())
 

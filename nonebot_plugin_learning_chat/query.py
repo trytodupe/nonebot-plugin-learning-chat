@@ -346,7 +346,7 @@ async def execute_query_with_cache(
         - messages: Limited by qf.limit
         - total_count: Total matching messages
         - is_fuzzy: True if result is from fuzzy time match (display ~)
-        - cache_percent: None if no cache, 100 if full cache hit, 0-99 if partial
+        - cache_percent: None if no cache, 100 if full cache hit, 0-99 if partial (time coverage)
     """
     cache = get_query_cache()
     cache_filter = qf.to_cache_filter()
@@ -401,7 +401,7 @@ async def _execute_incremental_query(
 ) -> tuple[list[ChatMessage], int, bool, int]:
     """
     Execute incremental query and merge with cached results.
-    Returns cache_percent based on how much was from cache.
+    Returns cache_percent based on time coverage.
     """
     # Get original cache entry for full data
     old_entry = cache_result.cache_entry
@@ -412,7 +412,6 @@ async def _execute_incremental_query(
 
     # Get ALL cached messages (not filtered), for merging
     cached_messages = list(old_entry.messages)
-    cached_total = old_entry.total_count
 
     # Query missing ranges
     incremental_messages: list[ChatMessage] = []
@@ -421,8 +420,6 @@ async def _execute_incremental_query(
             qf, time_after_override=start, time_before_override=end
         )
         incremental_messages.extend(batch)
-
-    incremental_count = len(incremental_messages)
 
     # Merge and deduplicate by message_id
     all_messages = cached_messages + incremental_messages
@@ -444,9 +441,35 @@ async def _execute_incremental_query(
     # Total count is the merged unique count
     total_count = len(unique_messages)
 
-    # Calculate cache percentage based on original cached vs incremental
-    # Use the proportion of cached messages in the final result
-    cache_percent = int(cached_total * 100 / total_count) if total_count > 0 else 0
+    # Calculate cache percentage based on time coverage.
+    # We intentionally avoid message-count-based calculation because a partial time overlap
+    # may contribute 0 matching messages even when most of the time range was cached.
+    query_start = qf.time_after or 0
+    query_end = qf.time_before or int(time_module.time())
+
+    def _merge_ranges(ranges: list[tuple[int, int]]) -> list[tuple[int, int]]:
+        if not ranges:
+            return []
+        sorted_ranges = sorted(ranges, key=lambda r: r[0])
+        merged: list[list[int]] = [[sorted_ranges[0][0], sorted_ranges[0][1]]]
+        for start, end in sorted_ranges[1:]:
+            last = merged[-1]
+            if start <= last[1] + 1:
+                last[1] = max(last[1], end)
+            else:
+                merged.append([start, end])
+        return [(s, e) for s, e in merged]
+
+    cache_percent = 0
+    if query_end >= query_start:
+        total_duration = query_end - query_start + 1
+        merged_missing = _merge_ranges(cache_result.missing_ranges)
+        missing_duration = sum(max(0, end - start + 1) for start, end in merged_missing)
+        cached_duration = max(0, total_duration - missing_duration)
+        cache_percent = (
+            int(cached_duration * 100 / total_duration) if total_duration > 0 else 0
+        )
+
     cache_percent = min(cache_percent, 99)  # Cap at 99% since we did query something
 
     # Calculate merged time range
