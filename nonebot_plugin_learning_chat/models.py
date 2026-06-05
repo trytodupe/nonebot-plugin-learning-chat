@@ -1,10 +1,6 @@
 from nonebot_plugin_tortoise_orm import add_model
 
-add_model(
-    __name__,
-    db_name="learning_chat",
-    db_url="sqlite://data/learning_chat/learning_chat.db",
-)
+add_model(__name__)
 
 import functools
 from functools import cached_property
@@ -113,7 +109,7 @@ class ChatAnswer(Model):
 
     context: fields.ForeignKeyNullableRelation[ChatContext] = fields.ForeignKeyField(
         # db_name.models_name
-        "learning_chat.ChatContext",
+        "default.ChatContext",
         related_name="answers",
         null=True,
     )
