@@ -36,6 +36,29 @@ SORRY_WORDS = [
 ]
 DOUBT_WORDS = [f"{NICKNAME}有说什么奇怪的话吗？"]
 BREAK_REPEAT_WORDS = ["打断复读", "打断！"]
+
+# Cache for cross-group keywords query (expensive GROUP BY on answer table).
+# Maps threshold -> list of keywords. Invalidated whenever answers are modified.
+_cross_group_cache: dict[int, list] = {}
+
+
+async def _get_cross_group_keywords(threshold: int) -> list:
+    """Get keywords that appear across multiple groups, with cache."""
+    if threshold in _cross_group_cache:
+        return _cross_group_cache[threshold]
+    result = await ChatAnswer.annotate(cross=Count("keywords")) \
+        .group_by("keywords") \
+        .filter(cross__gte=threshold) \
+        .values_list("keywords", flat=True)
+    _cross_group_cache[threshold] = result
+    return result
+
+
+def _invalidate_cross_group_cache():
+    """Invalidate cache after answer table mutation."""
+    _cross_group_cache.clear()
+
+
 ALL_WORDS = (
     NO_PERMISSION_WORDS
     + SORRY_WORDS
@@ -277,10 +300,7 @@ class LearningChat:
             )
             # 获取满足跨群条件的回复
 
-            keywords__in = await ChatAnswer.annotate(cross=Count("keywords")) \
-                .group_by("keywords") \
-                .filter(cross__gte=cross_group_threshold) \
-                .values_list("keywords", flat=True)
+            keywords__in = await _get_cross_group_keywords(cross_group_threshold)
 
             def chunk_list(lst, chunk_size):
                 for i in range(0, len(lst), chunk_size):
@@ -380,12 +400,14 @@ class LearningChat:
                 ban_word.global_ban = True
                 log_info("群聊学习", f"学习词<m>{keywords}</m>将被全局禁用")
                 await ChatAnswer.filter(keywords=keywords).delete()
+                _invalidate_cross_group_cache()
             else:
                 log_info(
                     "群聊学习", f"群<m>{self.data.group_id}</m>禁用了学习词<m>{keywords}</m>")
                 await ChatAnswer.filter(
                     keywords=keywords, group_id=self.data.group_id
                 ).delete()
+            _invalidate_cross_group_cache()
         else:
             # 没有屏蔽记录，则新建
             log_info(
@@ -398,6 +420,7 @@ class LearningChat:
             ).delete()
         await ChatContext.filter(keywords=keywords).delete()
         await ban_word.save()
+        _invalidate_cross_group_cache()
         return True
 
     @staticmethod
@@ -424,6 +447,7 @@ class LearningChat:
                 ban_word.global_ban = True
                 log_info("群聊学习", f"学习词<m>{data.keywords}</m>将被全局禁用")
                 await ChatAnswer.filter(keywords=data.keywords).delete()
+            _invalidate_cross_group_cache()
         else:
             # 没有屏蔽记录，则新建
             if isinstance(data, ChatMessage):
@@ -440,6 +464,7 @@ class LearningChat:
                 ban_word = ChatBlackList(
                     keywords=data.keywords, global_ban=True)
                 await ChatAnswer.filter(keywords=data.keywords).delete()
+            _invalidate_cross_group_cache()
         await ChatContext.filter(keywords=data.keywords).delete()
         await ban_word.save()
 
@@ -673,6 +698,7 @@ class LearningChat:
                 context=context,
                 messages=[self.data.message],
             )
+        _invalidate_cross_group_cache()
         log_debug(
             "群聊学习", f"➤将被学习为<m>{message.message}</m>的回答，已学次数为<m>{answer.count}</m>"
         )
