@@ -40,18 +40,32 @@ BREAK_REPEAT_WORDS = ["打断复读", "打断！"]
 # Cache for cross-group keywords query (expensive GROUP BY on answer table).
 # Maps threshold -> list of keywords. Invalidated whenever answers are modified.
 _cross_group_cache: dict[int, list] = {}
+# Lock per threshold to prevent concurrent cold-cache queries.
+_cross_group_locks: dict[int, asyncio.Lock] = {}
 
 
 async def _get_cross_group_keywords(threshold: int) -> list:
     """Get keywords that appear across multiple groups, with cache."""
     if threshold in _cross_group_cache:
         return _cross_group_cache[threshold]
-    result = await ChatAnswer.annotate(cross=Count("keywords")) \
-        .group_by("keywords") \
-        .filter(cross__gte=threshold) \
-        .values_list("keywords", flat=True)
-    _cross_group_cache[threshold] = result
-    return result
+
+    # Serialize cold-cache queries per threshold to avoid multiple
+    # concurrent 55s full-table scans crushing the database.
+    if threshold not in _cross_group_locks:
+        _cross_group_locks[threshold] = asyncio.Lock()
+
+    async with _cross_group_locks[threshold]:
+        # Double-check: another caller may have populated the cache
+        # while we waited for the lock.
+        if threshold in _cross_group_cache:
+            return _cross_group_cache[threshold]
+
+        result = await ChatAnswer.annotate(cross=Count("keywords")) \
+            .group_by("keywords") \
+            .filter(cross__gte=threshold) \
+            .values_list("keywords", flat=True)
+        _cross_group_cache[threshold] = result
+        return result
 
 
 def _invalidate_cross_group_cache():
