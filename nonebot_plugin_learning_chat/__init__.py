@@ -7,7 +7,7 @@ import asyncio
 import random
 import time
 
-from nonebot import on_message, require, logger, get_adapter
+from nonebot import on_message, require, logger, get_adapter, get_driver
 from nonebot.adapters.onebot.v11 import (
     GroupMessageEvent,
     GROUP,
@@ -59,6 +59,23 @@ learning_chat = on_message(
         "pm_priority": 1,
     },
 )
+
+
+@get_driver().on_startup
+async def _warm_cross_group_cache():
+    """Pre-warm the cross-group keywords cache on startup.
+
+    The underlying query does a full scan of the answer table (1M+ rows,
+    55s cold).  Running it eagerly avoids the first user message paying
+    that cost.
+    """
+    try:
+        from .handler import _get_cross_group_keywords
+        await _get_cross_group_keywords(config_manager.config.cross_group_threshold)
+        await _get_cross_group_keywords(1)  # to_me threshold
+        logger.info("群聊学习", "跨群关键词缓存预热完成")
+    except Exception as e:
+        logger.warning(f"跨群关键词缓存预热失败: {e}")
 
 
 @learning_chat.handle()
