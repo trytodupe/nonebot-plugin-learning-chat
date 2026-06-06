@@ -38,33 +38,39 @@ DOUBT_WORDS = [f"{NICKNAME}有说什么奇怪的话吗？"]
 BREAK_REPEAT_WORDS = ["打断复读", "打断！"]
 
 # Cache for cross-group keywords query (expensive GROUP BY on answer table).
-# Maps threshold -> list of keywords. Invalidated whenever answers are modified.
-_cross_group_cache: dict[int, list] = {}
+# Maps threshold -> (timestamp, list_of_keywords). Refreshed on TTL expiry.
+_cross_group_cache: dict[int, tuple[float, list]] = {}
 # Single lock to serialize cold-cache queries (one 55s query is bad, 13 is worse).
 _cross_group_lock = asyncio.Lock()
+_CROSS_GROUP_CACHE_TTL = 300  # 5 minutes
 
 
 async def _get_cross_group_keywords(threshold: int) -> list:
     """Get keywords that appear across multiple groups, with cache."""
+    now = time.time()
     if threshold in _cross_group_cache:
-        return _cross_group_cache[threshold]
+        ts, cached = _cross_group_cache[threshold]
+        if now - ts < _CROSS_GROUP_CACHE_TTL:
+            return cached
 
     async with _cross_group_lock:
         # Double-check: another caller may have populated the cache
-        # while we waited for the lock.
+        # while we waited for the lock, or TTL may have been refreshed.
         if threshold in _cross_group_cache:
-            return _cross_group_cache[threshold]
+            ts, cached = _cross_group_cache[threshold]
+            if now - ts < _CROSS_GROUP_CACHE_TTL:
+                return cached
 
         result = await ChatAnswer.annotate(cross=Count("keywords")) \
             .group_by("keywords") \
             .filter(cross__gte=threshold) \
             .values_list("keywords", flat=True)
-        _cross_group_cache[threshold] = result
+        _cross_group_cache[threshold] = (time.time(), result)
         return result
 
 
 def _invalidate_cross_group_cache():
-    """Invalidate cache after answer table mutation."""
+    """Invalidate cache after answer table mutation (deletes only)."""
     _cross_group_cache.clear()
 
 
@@ -707,7 +713,6 @@ class LearningChat:
                 context=context,
                 messages=[self.data.message],
             )
-        _invalidate_cross_group_cache()
         log_debug(
             "群聊学习", f"➤将被学习为<m>{message.message}</m>的回答，已学次数为<m>{answer.count}</m>"
         )
